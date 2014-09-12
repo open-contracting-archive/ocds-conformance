@@ -5,7 +5,12 @@ Checks the conformance of known implementations to [OCDS](http://standard.open-c
 ## Getting Started
 
     bundle
-    bundle exec rake
+    bundle exec rake check[URI]
+
+Examples:
+
+    bundle exec rake check[https://github.com/devgateway/ca-app-ocds-export]
+    bundle exec rake check[https://raw.githubusercontent.com/open-contracting/sample-data/master/buyandsell/ocds_data/complete_record.json.zip]
 
 ## Bugs? Questions?
 

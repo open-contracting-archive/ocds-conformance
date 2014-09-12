@@ -20,7 +20,9 @@ GEM
     multipart-post (2.0.0)
     octokit (3.3.1)
       sawyer (~> 0.5.3)
+    oj (2.10.0)
     rake (10.3.2)
+    rubyzip (1.1.6)
     sawyer (0.5.5)
       addressable (~> 2.3.5)
       faraday (~> 0.8, < 0.10)
@@ -37,4 +39,6 @@ DEPENDENCIES
   faraday_middleware (~> 0.9.0)
   json-schema
   octokit
+  oj
   rake
+  rubyzip
