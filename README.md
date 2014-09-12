@@ -1,6 +1,6 @@
 # Open Contracting Data Standard: Conformance
 
-Checks the conformance of known implementations to [OCDS](http://standard.open-contracting.org/).
+Checks the conformance of known implementations to [OCDS](http://standard.open-contracting.org/), and reports which classes and properties are unused.
 
 ## Getting Started
 
