@@ -11,7 +11,6 @@ require 'octokit'
 
 CACHE_DIR = File.expand_path('web_cache', __dir__)
 JSON_SCHEMA_URL = 'https://raw.githubusercontent.com/open-contracting/standard/master/standard/schema/release-schema.json'
-LOGGER = ColorLogger.new('ocds')
 
 class ColorLogger
   # Returns a configured logger.
@@ -43,6 +42,8 @@ class ColorLogger
     logger
   end
 end
+
+LOGGER = ColorLogger.new('ocds', level: 'INFO')
 
 def initialize_usage(schema, definitions, prefix=nil)
   usage = {}
@@ -196,7 +197,7 @@ task :default do
 
     response = client.tree(repo, sha, recursive: true)
     if response.truncated?
-      raise "#{tree.url} is truncated"
+      LOGGER.error "#{tree.url} is truncated"
     else
       response.tree.each do |entry|
         if entry.type == 'blob' && File.extname(entry.path) == '.json'
@@ -233,20 +234,22 @@ task :default do
           end
 
           releases.each do |release|
-            print '.'
+            if [Logger::Severity::DEBUG, Logger::Severity::INFO].include?(LOGGER.level)
+              print '.'
+            end
 
             update_usage(usage, release)
 
             begin
               JSON::Validator.validate!(json_schema, release) # slow
             rescue JSON::Schema::ValidationError => e
-              puts "#{entry.path}: #{e.message}\n#{JSON.pretty_generate(release)}"
+              LOGGER.warn "#{entry.path}: #{e.message}\n#{JSON.pretty_generate(release)}"
             end
           end
         elsif entry.type != 'blob'
-          raise "#{entry.path} is not a blob"
+          LOGGER.error "#{entry.path} is not a blob"
         else
-          raise "#{entry.path} is not a .json file"
+          LOGGER.error "#{entry.path} is not a .json file"
         end
       end
     end
