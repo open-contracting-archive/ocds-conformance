@@ -104,12 +104,6 @@ def update_usage(usage, release, prefix=nil)
   release.each do |name,value|
     if !value.nil? && (Fixnum === value || Float === value || value === true || value === false || !value.empty?)
 
-      # @todo Cut as issues are resolved.
-      # @see https://github.com/devgateway/ca-app-ocds-export/issues/5
-      if name == 'countryName'
-        name = 'country-name'
-      end
-
       key = if prefix
         "#{prefix}_#{name}"
       else
@@ -184,34 +178,20 @@ def items_from_github(repo)
       if entry.type == 'blob' && File.extname(entry.path) == '.json'
         LOGGER.info "Getting #{entry.path}"
 
-        blob = client.blob(repo, entry.sha)
+        begin
+          blob = client.blob(repo, entry.sha)
 
-        content = blob.content
-        if blob.encoding == 'base64'
-          content = Base64.decode64(content)
-        end
-        content = Oj.load(content)
-
-        # @todo Cut as issues are resolved.
-        if repo == 'devgateway/ca-app-ocds-export'
-          content['releases'].each do |release|
-            # @see https://github.com/devgateway/ca-app-ocds-export/issues/3
-            case release['formation']['selectionCriteria']
-            when 'Lowest price', 'The most economic tender'
-              release['formation']['selectionCriteria'] = 'Lowest Cost'
-            when 'Not defined', 'Not applicable'
-              release['formation'].delete('selectionCriteria')
-            end
-            # @see https://github.com/devgateway/ca-app-ocds-export/issues/4
-            release['awards'].each do |award|
-              award['suppliers'].each do |supplier|
-                supplier['id']['uri'].gsub!(' ', '%20')
-              end
-            end
+          content = blob.content
+          if blob.encoding == 'base64'
+            content = Base64.decode64(content)
           end
-        end
+          content = Oj.load(content)
 
-        items[entry.path] = content
+          items[entry.path] = content
+          break
+        rescue Octokit::BadGateway => e
+          LOGGER.error("#{e} #{entry.path}")
+        end
       elsif entry.type != 'blob'
         LOGGER.warn "#{entry.path} is not a blob"
       else
@@ -258,76 +238,80 @@ def process_release(name, release, usage, schema)
 
   # @todo Cut as issues are resolved.
   # @see https://github.com/open-contracting/sample-data/issues/1
-  release['planning']['publicHearingNotices'].each do |item|
-    if item['publishedDate'] == ''
-      item['publishedDate'] = nil
+  if release['planning']
+    release['planning'].fetch('publicHearingNotices', []).each do |item|
+      if item['publishedDate'] == ''
+        item['publishedDate'] = nil
+      end
+      if item['isAmendment'] == '1'
+        item['isAmendment'] = true
+      elsif item['isAmendment'] == '0'
+        item['isAmendment'] = false
+      elsif item['isAmendment'] == ''
+        item['isAmendment'] = nil
+      end
+      if item['amendment']['amendmentDate'] == ''
+        item['amendment']['amendmentDate'] = nil
+      end
     end
-    if item['isAmendment'] == '1'
-      item['isAmendment'] = true
-    elsif item['isAmendment'] == '0'
-      item['isAmendment'] = false
-    elsif item['isAmendment'] == ''
-      item['isAmendment'] = nil
-    end
-    if item['amendment']['amendmentDate'] == ''
-      item['amendment']['amendmentDate'] = nil
+    release['planning'].fetch('anticipatedMilestones', []).each do |item|
+      if item['date'] == ''
+        item['date'] = nil
+      end
+      if item['dateType'] == ''
+        item['dateType'] = nil
+      end
+      item['attachments'].each do |subitem|
+        if subitem['lastModified'] == ''
+          subitem['lastModified'] = nil
+        end
+      end
     end
   end
-  release['planning']['anticipatedMilestones'].each do |item|
-    if item['date'] == ''
-      item['date'] = nil
+  if release['formation']
+    unless ['Open', 'Selective', 'Limited', nil].include?(release['formation']['method'])
+      LOGGER.debug("Unrecognized method: #{release['formation']['method'].inspect}")
+      release['formation']['method'] = nil
     end
-    if item['dateType'] == ''
-      item['dateType'] = nil
+    unless ['Lowest Cost', 'Best Proposal', 'Best Value to Government', 'Single bid only', nil].include?(release['formation']['selectionCriteria'])
+      LOGGER.debug("Unrecognized selectionCriteria: #{release['formation']['selectionCriteria'].inspect}")
+      release['formation']['selectionCriteria'] = nil
     end
-    item['attachments'].each do |subitem|
+    if release['formation']['tenderPeriod'] && release['formation']['tenderPeriod']['endDate'] && release['formation']['tenderPeriod']['endDate']['Eastern']
+      LOGGER.debug("Invalid date: #{release['formation']['tenderPeriod']['endDate']}")
+      release['formation']['tenderPeriod']['endDate'] = nil
+    end
+    release['formation'].fetch('attachments', []).each do |subitem|
       if subitem['lastModified'] == ''
         subitem['lastModified'] = nil
       end
     end
-  end
-  unless ['Open', 'Selective', 'Limited', nil].include?(release['formation']['method'])
-    LOGGER.debug("Unrecognized method: #{release['formation']['method'].inspect}")
-    release['formation']['method'] = nil
-  end
-  unless ['Lowest Cost', 'Best Proposal', 'Best Value to Government', 'Single bid only', nil].include?(release['formation']['selectionCriteria'])
-    LOGGER.debug("Unrecognized selectionCriteria: #{release['formation']['selectionCriteria'].inspect}")
-    release['formation']['selectionCriteria'] = nil
-  end
-  if release['formation']['tenderPeriod']['endDate'] && release['formation']['tenderPeriod']['endDate']['Eastern']
-    LOGGER.debug("Invalid date: #{release['formation']['tenderPeriod']['endDate']}")
-    release['formation']['tenderPeriod']['endDate'] = nil
-  end
-  release['formation']['attachments'].each do |subitem|
-    if subitem['lastModified'] == ''
-      subitem['lastModified'] = nil
-    end
-  end
-  release['formation']['itemsToBeProcured'].each do |item|
-    if item['classificationScheme'] == ''
-      item['classificationScheme'] = nil
-    end
-    if item['quantity'] == ''
-      item['quantity'] = nil
-    end
-    if item['valuePerUnit']['amount'] == ''
-      item['valuePerUnit']['amount'] = nil
+    release['formation'].fetch('itemsToBeProcured', []).each do |item|
+      if item['classificationScheme'] == ''
+        item['classificationScheme'] = nil
+      end
+      if item['quantity'] == ''
+        item['quantity'] = nil
+      end
+      if item['valuePerUnit'] && item['valuePerUnit']['amount'] == ''
+        item['valuePerUnit']['amount'] = nil
+      end
     end
   end
   release['awards'].each do |item|
-    if item['notice']['amendment']['amendmentDate'] == 'None'
+    if item['notice']['amendment'] && item['notice']['amendment']['amendmentDate'] == 'None'
       item['notice']['amendment']['amendmentDate'] = nil
     end
     item['itemsAwarded'].each do |subitem|
       if subitem['quantity'] == ''
         subitem['quantity'] = nil
       end
-      if subitem['valuePerUnit']['amount'] == ''
+      if subitem['valuePerUnit'] && subitem['valuePerUnit']['amount'] == ''
         subitem['valuePerUnit']['amount'] = nil
       end
     end
   end
-  release['contracts'].each do |item|
+  release.fetch('contracts', []).each do |item|
     if item['isAmendment'] == '1'
       item['isAmendment'] = true
     elsif item['isAmendment'] == '0'
@@ -365,22 +349,24 @@ def process_release(name, release, usage, schema)
       end
     end
   end
-  release['performance']['milestones'].each do |item|
-    if item['date'] == ''
-      item['date'] = nil
+  if release['performance']
+    release['performance'].fetch('milestones', []).each do |item|
+      if item['date'] == ''
+        item['date'] = nil
+      end
+      if item['dateType'] == ''
+        item['dateType'] = nil
+      end
+      item['attachments'].each do |subitem|
+        if subitem['lastModified'] == ''
+          subitem['lastModified'] = nil
+        end
+      end
     end
-    if item['dateType'] == ''
-      item['dateType'] = nil
-    end
-    item['attachments'].each do |subitem|
+    release['performance'].fetch('reports', []).each do |subitem|
       if subitem['lastModified'] == ''
         subitem['lastModified'] = nil
       end
-    end
-  end
-  release['performance']['reports'].each do |subitem|
-    if subitem['lastModified'] == ''
-      subitem['lastModified'] = nil
     end
   end
 
