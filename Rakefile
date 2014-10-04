@@ -103,7 +103,6 @@ end
 def update_usage(usage, release, prefix=nil)
   release.each do |name,value|
     if !value.nil? && (Fixnum === value || Float === value || value === true || value === false || !value.empty?)
-
       key = if prefix
         "#{prefix}_#{name}"
       else
@@ -188,7 +187,6 @@ def items_from_github(repo)
           content = Oj.load(content)
 
           items[entry.path] = content
-          break
         rescue Octokit::BadGateway => e
           LOGGER.error("#{e} #{entry.path}")
         end
@@ -387,6 +385,7 @@ def client
   end
 end
 
+desc 'Validate OCDS datasets'
 task :check, [:uri] do |t,args|
   unless args[:uri]
     raise 'Usage: bundle exec rake check[URI]'
@@ -398,7 +397,7 @@ task :check, [:uri] do |t,args|
 
   # @todo Cut as issues are resolved.
   # @see https://github.com/open-contracting/standard/issues/67
-  json_schema['properties']['releaseDate']['pattern'] = '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+  json_schema['properties']['releaseDate']['pattern'] = '^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}[-+][0-9]{4})?$'
   json_schema['properties']['releaseDate'].delete('format')
   # @see https://github.com/open-contracting/standard/issues/68
   json_schema['definitions']['identifier']['properties']['uid']['type'] = ['string', 'integer', 'null']
@@ -406,29 +405,18 @@ task :check, [:uri] do |t,args|
   json_schema['definitions']['address'].delete('required')
   json_schema['definitions'].each do |_,subschema|
     subschema['properties'].each do |name,definition|
-      # @see https://github.com/open-contracting/standard/issues/51
-      unless subschema.key?('required') && subschema['required'].include?(name)
-        unless Array === definition['type']
-          definition['type'] = [definition['type']]
-        end
-        unless definition['type'].include?('null')
-          definition['type'] << 'null'
-        end
-        if definition['enum'] && !definition['enum'].include?(nil)
-          definition['enum'] << nil
-        end
-      end
-
       # @see https://github.com/open-contracting/standard/issues/67
       if definition['format'] == 'date-time'
-        definition['pattern'] = '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        definition['pattern'] = '^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}[-+][0-9]{4})?$'
         definition.delete('format')
       end
     end
   end
   # @see https://github.com/open-contracting/standard/pull/69
-  hash = json_schema['properties']['formation'].delete('oneOf')
-  json_schema['properties']['formation']['$ref'] = hash[0].fetch('$ref')
+  json_schema['properties']['formation'] = json_schema['properties'].delete('tender')
+  json_schema['required'].delete('formationType')
+
+  usage = initialize_usage(json_schema, json_schema.fetch('definitions'))
 
   repo = args[:uri][%r{://github.com/([^/]+/[^/]+)\z}, 1]
 
@@ -441,8 +429,6 @@ task :check, [:uri] do |t,args|
   else
     raise "Unrecognized argument #{args[:uri]}"
   end
-
-  usage = initialize_usage(json_schema, json_schema.fetch('definitions'))
 
   items.each do |name,item|
     LOGGER.info "Processing #{name}"
