@@ -21,6 +21,7 @@ task :check, [:uri] do |t,args|
     end
   end
 
+  # Initialize the usage statistics.
   def initialize_usage(schema, definitions, prefix=nil)
     usage = {}
     schema['properties'].each do |name,definition|
@@ -36,6 +37,7 @@ task :check, [:uri] do |t,args|
     usage
   end
 
+  # Initialize the report, which is a nested version of the usage statistics.
   def initialize_report(schema, definitions, usage, prefix=nil)
     report = {}
     schema['properties'].each do |name,definition|
@@ -51,6 +53,7 @@ task :check, [:uri] do |t,args|
     report
   end
 
+  # Track the usage of each property of a release.
   def update_usage(usage, release, prefix=nil)
     release.each do |name,value|
       if !value.nil? && (Fixnum === value || Float === value || value === true || value === false || !value.empty?)
@@ -73,6 +76,7 @@ task :check, [:uri] do |t,args|
     end
   end
 
+  # Fold sections of the report for easier reading.
   def abbreviate_report(report)
     report = report.dup
 
@@ -101,6 +105,7 @@ task :check, [:uri] do |t,args|
     end
   end
 
+  # @return [Array] a list of items from a GitHub repository
   def items_from_github(repo)
     items = {}
 
@@ -112,10 +117,10 @@ task :check, [:uri] do |t,args|
       connection.use Octokit::Response::RaiseError
       connection.adapter Faraday.default_adapter
     end
-    client = Octokit::Client.new
+    github = Octokit::Client.new
 
-    sha = client.commits(repo, per_page: 1)[0].sha
-    response = client.tree(repo, sha, recursive: true)
+    sha = github.commits(repo, per_page: 1)[0].sha
+    response = github.tree(repo, sha, recursive: true)
 
     if response.truncated?
       LOGGER.warn "#{tree.url} is truncated"
@@ -125,7 +130,7 @@ task :check, [:uri] do |t,args|
           LOGGER.info "Getting #{entry.path}"
 
           begin
-            blob = client.blob(repo, entry.sha)
+            blob = github.blob(repo, entry.sha)
 
             content = blob.content
             if blob.encoding == 'base64'
@@ -148,6 +153,7 @@ task :check, [:uri] do |t,args|
     items
   end
 
+  # @return [Array] a list of items from a remote ZIP file
   def items_from_zip(uri)
     items = {}
 
@@ -155,7 +161,7 @@ task :check, [:uri] do |t,args|
 
     Tempfile.open('ocds-conformance') do |f|
       f.binmode
-      f.write(client.get(uri).body)
+      f.write(http.get(uri).body)
       f.rewind
 
       Zip::File.open(f) do |zipfile|
@@ -174,6 +180,7 @@ task :check, [:uri] do |t,args|
     items
   end
 
+  # Update usage statistics and validate release.
   def process_release(name, release, usage, schema)
     if [Logger::Severity::DEBUG, Logger::Severity::INFO].include?(LOGGER.level)
       print '.'
@@ -188,7 +195,8 @@ task :check, [:uri] do |t,args|
     end
   end
 
-  def client
+  # @return an HTTP client
+  def http
     Faraday.new do |connection|
       connection.response :caching do
         ActiveSupport::Cache::FileStore.new(CACHE_DIR, expires_in: 604800) # 1 week
@@ -198,28 +206,28 @@ task :check, [:uri] do |t,args|
     end
   end
 
+  # Start of task.
   unless args[:uri]
     raise 'Usage: bundle exec rake check[URI]'
   end
 
-  JSON::Validator.cache_schemas = true
-
-  json_schema = Oj.load(client.get('https://raw.githubusercontent.com/open-contracting/standard/master/standard/schema/release-schema.json').body)
-
-  usage = initialize_usage(json_schema, json_schema.fetch('definitions'))
-
-  repo = args[:uri][%r{://github.com/([^/]+/[^/]+)\z}, 1]
-
-  items = if repo
-    items_from_github(repo)
+  # Get the items to validate.
+  items = if args[:uri][%r{://github.com/([^/]+/[^/]+)\z}, 1]
+    items_from_github($1)
   elsif args[:uri][/\.zip\z/]
     items_from_zip(args[:uri])
   elsif args[:uri][/\.json\z/]
-    [Oj.load(client.get(args[:uri]).body)]
+    [Oj.load(http.get(args[:uri]).body)]
   else
     raise "Unrecognized argument #{args[:uri]}"
   end
 
+  # Initialize the schema and term usage tracker.
+  JSON::Validator.cache_schemas = true
+  json_schema = Oj.load(http.get('https://raw.githubusercontent.com/open-contracting/standard/master/standard/schema/release-schema.json').body)
+  usage = initialize_usage(json_schema, json_schema.fetch('definitions'))
+
+  # Report after each record and after all releases.
   items.each do |name,item|
     LOGGER.info "Processing #{name}"
 
@@ -230,11 +238,10 @@ task :check, [:uri] do |t,args|
       end
     elsif item.key?('records')
       LOGGER.info "#{item['records'].size} records"
-      releases = []
       item['records'].each do |record|
         if record.key?('releases')
           record['releases'].each do |release|
-            unless release['uri'] # linked release
+            unless release['url'] # linked release
               process_release(name, release, usage, json_schema)
             end
           end
@@ -247,13 +254,11 @@ task :check, [:uri] do |t,args|
         end
 
         report = initialize_report(json_schema, json_schema.fetch('definitions'), usage)
-
         puts JSON.pretty_generate(abbreviate_report(report))
       end
     end
   end
 
   report = initialize_report(json_schema, json_schema.fetch('definitions'), usage)
-
   puts JSON.pretty_generate(abbreviate_report(report))
 end
